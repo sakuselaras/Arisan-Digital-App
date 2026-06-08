@@ -187,8 +187,10 @@ const DataProvider = ({ children }) => {
            await api.insert('logs', { id: generateId(), tenantId: currentUser.tenantId, date: new Date().toISOString(), action: logAction, details: logDetails, userRole: currentUser.role });
         }
         if(currentUser) await loadData(currentUser);
+        return true; // Berhasil mengeksekusi aksi
      } catch (err) {
         showToast(err.message, "error");
+        return false; // Gagal mengeksekusi aksi
      }
   }
 
@@ -440,9 +442,13 @@ const GroupsPage = () => {
       status: 'Menunggu Anggota', 
       createdAt: new Date().toISOString() 
     };
-    await performAction(() => api.insert('groups', newGroup), 'Buat Grup Baru', `Grup: ${newGroup.name}`);
-    showToast('Grup berhasil dibuat');
-    setModalOpen(false);
+
+    // PERBAIKAN LOGIKA: Hanya tampilkan pesan berhasil & tutup modal apabila database merespon sukses
+    const success = await performAction(() => api.insert('groups', newGroup), 'Buat Grup Baru', `Grup: ${newGroup.name}`);
+    if (success) {
+       showToast('Grup berhasil dibuat');
+       setModalOpen(false);
+    }
   };
 
   return (
