@@ -5,18 +5,40 @@ import {
   Menu, LogOut, RefreshCw, X 
 } from 'lucide-react';
 
-// === KONFIGURASI DATABASE SUPABASE (Melalui CDN) ===
-// Kita memuat Supabase dari CDN untuk menghindari error "Could not resolve" pada lingkungan tertentu.
-// Script CDN Supabase harus ditambahkan di index.html Anda:
-// <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-
+// === KONFIGURASI SUPABASE (VERSI AMAN UNTUK SEMUA LINGKUNGAN) ===
+// Menggunakan import dinamis / CDN Fallback untuk mencegah error kompilasi
+let supabase = null;
 const SUPABASE_URL = 'https://mynunojhzwrnxvhpslgn.supabase.co'; 
 const SUPABASE_KEY = 'sb_publishable_yyx4DTIuc_mnDAULw-DGHA_300K7Y6_';
 
-// Memeriksa apakah Supabase tersedia secara global (dari CDN)
-const supabase = window.supabase ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY) : null;
+// Fungsi untuk inisialisasi Supabase dengan aman
+const initSupabase = async () => {
+    try {
+        // Coba import modul standar (biasanya bekerja di Vercel dengan package.json yang benar)
+        const module = await import('@supabase/supabase-js');
+        supabase = module.createClient(SUPABASE_URL, SUPABASE_KEY);
+    } catch (e) {
+        console.warn("Import module gagal, mencoba fallback CDN...", e);
+        // Fallback untuk lingkungan yang tidak memiliki dependencies terinstal (seperti Canvas/CodeSandbox)
+        if (window.supabase) {
+             supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+        } else {
+             // Jika window.supabase tidak ada (misal script CDN belum dimuat), buat script tag
+             const script = document.createElement('script');
+             script.src = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
+             script.onload = () => {
+                  if (window.supabase) {
+                       supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+                  }
+             };
+             document.head.appendChild(script);
+        }
+    }
+};
 
-// Pelindung LocalStorage (Fallback / Hanya untuk Sesi Login)
+initSupabase();
+
+// Pelindung LocalStorage (Hanya untuk Session Login fallback)
 const safeStorage = {
   get: (key, fallback = null) => {
     try { const item = localStorage.getItem(key); return item ? JSON.parse(item) : fallback; } 
@@ -30,7 +52,7 @@ const safeStorage = {
   }
 };
 
-// Utils
+// Utils (Telah dikembalikan)
 const generateId = () => Math.random().toString(36).substring(2, 11);
 const generateTenantCode = () => Math.random().toString(36).substring(2, 8).toUpperCase();
 const formatRp = (num) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(num || 0);
@@ -39,100 +61,38 @@ const formatDate = (dateString) => {
   return new Date(dateString).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' });
 };
 
-// API Bridge Produksi (Murni ke Supabase dengan Fallback Simulasi)
-// Fallback simulasi ditambahkan kembali SEMENTARA untuk membantu identifikasi error "Failed to fetch"
-// Jika Supabase tidak tersedia (misal karena CDN diblokir), aplikasi akan menggunakan LocalStorage
+// API Produksi (Langsung ke Supabase)
 const api = {
-  delay: (ms = 400) => new Promise(res => setTimeout(res, ms)),
   get: async (table, tenantId) => {
-    if (supabase) {
-      try {
-        const { data, error } = await supabase.from(table).select('*').eq('tenantId', tenantId);
-        if (error) throw error;
-        return data || [];
-      } catch (err) {
-         console.warn(`Gagal memuat ${table} dari Supabase. Menggunakan fallback lokal. Error:`, err);
-         // Fallback ke penyimpanan lokal jika gagal koneksi
-      }
-    }
-    await api.delay();
-    const allData = safeStorage.get(`saas_${table}`, []);
-    return allData.filter(d => d.tenantId === tenantId || d.tenantCode === tenantId);
+    if (!supabase) throw new Error("Koneksi database belum siap. Coba beberapa saat lagi.");
+    const { data, error } = await supabase.from(table).select('*').eq('tenantId', tenantId);
+    if (error) throw error;
+    return data || [];
   },
   insert: async (table, data) => {
-    if (supabase) {
-       try {
-        const { data: result, error } = await supabase.from(table).insert([data]).select();
-        if (error) throw error;
-        return result[0];
-       } catch (err) {
-         console.warn(`Gagal menyimpan ke ${table} di Supabase. Menyimpan lokal. Error:`, err);
-       }
-    }
-    await api.delay();
-    const allData = safeStorage.get(`saas_${table}`, []);
-    allData.push(data);
-    safeStorage.set(`saas_${table}`, allData);
-    return data;
+    if (!supabase) throw new Error("Koneksi database belum siap. Coba beberapa saat lagi.");
+    const { data: result, error } = await supabase.from(table).insert([data]).select();
+    if (error) throw error;
+    return result[0];
   },
   update: async (table, id, data) => {
-    if (supabase) {
-       try {
-        const { data: result, error } = await supabase.from(table).update(data).eq('id', id).select();
-        if (error) throw error;
-        return result[0];
-       } catch(err) {
-         console.warn(`Gagal update ${table} di Supabase. Update lokal. Error:`, err);
-       }
-    }
-    await api.delay();
-    const allData = safeStorage.get(`saas_${table}`, []);
-    const index = allData.findIndex(d => d.id === id);
-    if(index > -1) {
-       allData[index] = { ...allData[index], ...data };
-       safeStorage.set(`saas_${table}`, allData);
-    }
+    if (!supabase) throw new Error("Koneksi database belum siap. Coba beberapa saat lagi.");
+    const { data: result, error } = await supabase.from(table).update(data).eq('id', id).select();
+    if (error) throw error;
+    return result[0];
   },
   login: async (email, password) => {
-    if (supabase) {
-       try {
-        const { data, error } = await supabase.from('users').select('*').eq('email', email).eq('password', btoa(password)).single();
-        if (error || !data) throw new Error("Email atau password salah");
-        return data;
-       } catch (err) {
-         if (err.message !== "Email atau password salah") {
-            console.warn(`Gagal login via Supabase. Coba login lokal. Error:`, err);
-         } else {
-            throw err;
-         }
-       }
-    }
-    await api.delay();
-    const users = safeStorage.get('saas_users', []);
-    const user = users.find(u => u.email === email && u.password === btoa(password));
-    if(!user) throw new Error("Email atau password salah");
-    return user;
+    if (!supabase) throw new Error("Koneksi database belum siap. Coba beberapa saat lagi.");
+    const { data, error } = await supabase.from('users').select('*').eq('email', email).eq('password', btoa(password)).single();
+    if (error || !data) throw new Error("Email atau password salah");
+    return data;
   },
   getTenantByCode: async (tenantCode) => {
+    if (!supabase) throw new Error("Koneksi database belum siap. Coba beberapa saat lagi.");
     if(!tenantCode) throw new Error("Kode tidak valid");
-    if (supabase) {
-       try {
-        const { data, error } = await supabase.from('tenants').select('*').eq('code', tenantCode).single();
-        if (error || !data) throw new Error("Kode Arisan tidak ditemukan");
-        return data;
-       } catch (err) {
-          if (err.message !== "Kode Arisan tidak ditemukan") {
-             console.warn(`Gagal cek tenant via Supabase. Cek lokal. Error:`, err);
-          } else {
-             throw err;
-          }
-       }
-    }
-    await api.delay();
-    const tenants = safeStorage.get('saas_tenants', []);
-    const tenant = tenants.find(t => t.code === tenantCode);
-    if(!tenant) throw new Error("Kode Arisan tidak ditemukan");
-    return tenant;
+    const { data, error } = await supabase.from('tenants').select('*').eq('code', tenantCode).single();
+    if (error || !data) throw new Error("Kode Arisan tidak ditemukan");
+    return data;
   }
 };
 
@@ -157,7 +117,7 @@ const DataProvider = ({ children }) => {
          return;
       }
       const tenantId = user.tenantId;
-      const [ users, profiles, groups, groupMembers, deposits, draws, payouts, logs, tenants_local ] = await Promise.all([
+      const [ users, profiles, groups, groupMembers, deposits, draws, payouts, logs ] = await Promise.all([
         api.get('users', tenantId),
         api.get('profiles', tenantId),
         api.get('groups', tenantId),
@@ -165,11 +125,10 @@ const DataProvider = ({ children }) => {
         api.get('deposits', tenantId),
         api.get('draws', tenantId),
         api.get('payouts', tenantId),
-        api.get('logs', tenantId),
-        !supabase ? safeStorage.get('saas_tenants', []) : []
+        api.get('logs', tenantId)
       ]);
 
-      const myTenant = supabase ? await api.getTenantByCode(user.tenantCode) : tenants_local.find(t => t.id === tenantId);
+      const myTenant = await api.getTenantByCode(user.tenantCode);
 
       setDataState({
         users: users || [], profiles: profiles || [], groups: groups || [], groupMembers: groupMembers || [], 
@@ -179,7 +138,7 @@ const DataProvider = ({ children }) => {
       setCurrentUser(user);
     } catch (err) {
       console.error(err);
-      showToast("Gagal mengambil data sistem. Pastikan internet Anda stabil.", "error");
+      showToast("Gagal mengambil data sistem", "error");
     } finally {
       setIsLoading(false);
     }
@@ -211,7 +170,7 @@ const DataProvider = ({ children }) => {
         if(currentUser) await loadData(currentUser);
         return true; 
      } catch (err) {
-        showToast(err.message || "Terjadi kesalahan", "error");
+        showToast(err.message, "error");
         return false; 
      }
   }
@@ -220,8 +179,8 @@ const DataProvider = ({ children }) => {
     <DataContext.Provider value={{ data, currentUser, handleLoginSuccess, logout, performAction, showToast, isLoading }}>
       {children}
       {toastMsg && (
-        <div className={`fixed bottom-4 right-4 p-4 rounded-xl shadow-xl text-white z-50 flex items-center gap-2 animate-bounce ${toastMsg.type === 'error' ? 'bg-red-500' : 'bg-emerald-600'}`}>
-          {toastMsg.type === 'error' ? <AlertTriangle size={20}/> : <CheckCircle size={20}/>}
+        <div className={`fixed bottom-4 right-4 p-4 rounded-xl shadow-xl text-white z-50 flex items-center gap-2 animate-bounce ${toastMsg.type === 'error' ? 'bg-red-500' : 'bg-gray-800'}`}>
+          {toastMsg.type === 'error' ? <AlertTriangle size={20}/> : <CheckCircle size={20} className="text-emerald-400"/>}
           {toastMsg.msg}
         </div>
       )}
@@ -233,23 +192,23 @@ const Card = ({ children, className = '' }) => <div className={`bg-white p-6 rou
 const Button = ({ children, onClick, variant = 'primary', className = '', disabled, type='button' }) => {
   const base = "px-4 py-2.5 rounded-xl font-bold transition-all flex items-center justify-center gap-2 disabled:opacity-50 active:scale-95";
   const variants = {
-    primary: "bg-emerald-600 hover:bg-emerald-700 text-white shadow-md",
+    primary: "bg-gray-900 hover:bg-gray-800 text-white shadow-md",
     secondary: "bg-gray-100 hover:bg-gray-200 text-gray-800",
     danger: "bg-red-500 hover:bg-red-600 text-white shadow-md shadow-red-200",
-    outline: "border-2 border-emerald-600 text-emerald-600 hover:bg-emerald-50",
+    outline: "border-2 border-gray-900 text-gray-900 hover:bg-gray-50",
   };
   return <button type={type} onClick={onClick} disabled={disabled} className={`${base} ${variants[variant]} ${className}`}>{children}</button>;
 };
 const Input = ({ label, type = 'text', value, onChange, placeholder, required, disabled }) => (
   <div className="mb-4">
     {label && <label className="block text-sm font-bold text-gray-700 mb-1">{label}</label>}
-    <input type={type} value={value} onChange={onChange} placeholder={placeholder} required={required} disabled={disabled} className="w-full px-4 py-3 rounded-xl border border-gray-300 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 disabled:bg-gray-50 outline-none transition-all" />
+    <input type={type} value={value} onChange={onChange} placeholder={placeholder} required={required} disabled={disabled} className="w-full px-4 py-3 rounded-xl border border-gray-300 focus:ring-2 focus:ring-gray-900 focus:border-gray-900 disabled:bg-gray-50 outline-none transition-all" />
   </div>
 );
 const Select = ({ label, value, onChange, options, required, disabled }) => (
   <div className="mb-4">
     {label && <label className="block text-sm font-bold text-gray-700 mb-1">{label}</label>}
-    <select value={value} onChange={onChange} required={required} disabled={disabled} className="w-full px-4 py-3 rounded-xl border border-gray-300 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 disabled:bg-gray-50 outline-none transition-all">
+    <select value={value} onChange={onChange} required={required} disabled={disabled} className="w-full px-4 py-3 rounded-xl border border-gray-300 focus:ring-2 focus:ring-gray-900 focus:border-gray-900 disabled:bg-gray-50 outline-none transition-all">
       <option value="">Pilih...</option>
       {options.map(opt => <option key={opt.value || opt} value={opt.value || opt}>{opt.label || opt}</option>)}
     </select>
@@ -313,7 +272,7 @@ const AuthPage = () => {
         setFormData({email: '', password: '', name: '', tenantCode: '', tenantName: ''});
       }
     } catch (error) {
-      showToast(error.message || "Terjadi kesalahan jaringan", 'error');
+      showToast(error.message, 'error');
     } finally {
       setLoading(false);
     }
@@ -322,12 +281,11 @@ const AuthPage = () => {
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
       <div className="w-full max-w-md bg-white rounded-[2rem] shadow-2xl overflow-hidden border border-gray-100">
-        <div className="bg-emerald-950 p-8 text-center text-white relative overflow-hidden">
-          <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-900 rounded-bl-[100px] opacity-50"></div>
+        <div className="bg-gray-900 p-8 text-center text-white relative overflow-hidden">
+          <div className="absolute top-0 right-0 w-32 h-32 bg-gray-800 rounded-bl-[100px] opacity-50"></div>
           <Layers size={48} className="mx-auto mb-4 relative z-10 text-emerald-400" />
-          <h1 className="text-3xl font-black tracking-tight relative z-10">ArisanDigital</h1>
-          <p className="text-emerald-300 mt-2 text-sm relative z-10 font-medium">Sistem Arisan Digital SaaS</p>
-          {!supabase && <p className="text-amber-300 text-xs mt-2">(Mode Simulasi - CDN Supabase tidak terhubung)</p>}
+          <h1 className="text-3xl font-black tracking-tight relative z-10">ArisanAman</h1>
+          <p className="text-gray-400 mt-2 text-sm relative z-10 font-medium">Sistem Arisan Digital SaaS</p>
         </div>
         
         <div className="p-8">
@@ -355,7 +313,7 @@ const AuthPage = () => {
 
           <p className="text-center mt-8 text-gray-500 text-sm font-medium">
             {isLogin ? "Belum punya akun? " : "Sudah punya akun? "}
-            <button onClick={() => setIsLogin(!isLogin)} className="text-emerald-950 font-bold hover:underline">{isLogin ? 'Daftar disini' : 'Login disini'}</button>
+            <button onClick={() => setIsLogin(!isLogin)} className="text-gray-900 font-bold hover:underline">{isLogin ? 'Daftar disini' : 'Login disini'}</button>
           </p>
         </div>
       </div>
@@ -367,34 +325,8 @@ const AdminDashboard = () => {
   const { data, showToast } = useContext(DataContext);
   
   const copyTenantCode = () => {
-    const code = data.tenant?.code;
-    if (!code) return;
-
-    const fallbackCopy = (text) => {
-      const textArea = document.createElement("textarea");
-      textArea.value = text;
-      textArea.style.top = "0";
-      textArea.style.left = "0";
-      textArea.style.position = "fixed";
-      document.body.appendChild(textArea);
-      textArea.focus();
-      textArea.select();
-      try {
-        const successful = document.execCommand('copy');
-        if (successful) showToast('Kode berhasil disalin!');
-        else showToast('Gagal menyalin kode', 'error');
-      } catch (err) {
-        showToast('Gagal menyalin', 'error');
-      }
-      document.body.removeChild(textArea);
-    };
-
-    if (navigator.clipboard && window.isSecureContext) {
-       navigator.clipboard.writeText(code)
-        .then(() => showToast('Kode berhasil disalin!'))
-        .catch(() => fallbackCopy(code));
-    } else {
-       fallbackCopy(code);
+    if(navigator.clipboard) {
+       navigator.clipboard.writeText(data.tenant?.code).then(() => showToast('Kode disalin!')).catch(() => showToast('Gagal menyalin', 'error'));
     }
   };
 
@@ -440,23 +372,15 @@ const AdminDashboard = () => {
 const GroupsPage = () => {
   const { data, performAction, showToast, currentUser } = useContext(DataContext);
   const [isModalOpen, setModalOpen] = useState(false);
-  
-  const [formData, setFormData] = useState({ 
-    name: '', method: 'Undi Berkala', tenor: 'Bulanan', nominal: '', maxMembers: 10, totalPeriods: 11 
-  });
+  const [formData, setFormData] = useState({ name: '', method: 'Undi Berkala', tenor: 'Bulanan', nominal: '', maxMembers: 10, totalPeriods: 11 });
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    const newGroup = { 
-      id: generateId(), tenantId: currentUser.tenantId, name: formData.name, method: formData.method, tenor: formData.tenor,
-      nominal: parseInt(formData.nominal), maxMembers: parseInt(formData.maxMembers), totalPeriods: parseInt(formData.totalPeriods), 
-      status: 'Menunggu Anggota', createdAt: new Date().toISOString() 
-    };
-
+    const newGroup = { id: generateId(), tenantId: currentUser.tenantId, name: formData.name, method: formData.method, tenor: formData.tenor, nominal: parseInt(formData.nominal), maxMembers: parseInt(formData.maxMembers), totalPeriods: parseInt(formData.totalPeriods), status: 'Menunggu Anggota', createdAt: new Date().toISOString() };
     const success = await performAction(() => api.insert('groups', newGroup), 'Buat Grup Baru', `Grup: ${newGroup.name}`);
-    if (success) {
-       showToast('Grup berhasil dibuat');
-       setModalOpen(false);
+    if(success) {
+      showToast('Grup berhasil dibuat');
+      setModalOpen(false);
     }
   };
 
@@ -474,7 +398,6 @@ const GroupsPage = () => {
               <div className="absolute top-5 right-5"><Badge type={g.status === 'Aktif' ? 'success' : 'warning'}>{g.status}</Badge></div>
               <h3 className="font-black text-xl text-gray-900 mb-1">{g.name}</h3>
               <p className="text-sm text-gray-500 font-bold mb-6">{g.method} {g.tenor ? `• ${g.tenor}` : ''}</p>
-              
               <div className="grid grid-cols-2 gap-4 text-sm mb-6 bg-gray-50 p-5 rounded-xl border border-gray-100">
                 <div><p className="text-gray-500 mb-1 font-bold">Setoran</p><p className="font-black text-lg text-emerald-600">{formatRp(g.nominal)}</p></div>
                 <div><p className="text-gray-500 mb-1 font-bold">Anggota</p><p className="font-black text-lg text-gray-900">{members.length} / {g.maxMembers}</p></div>
@@ -488,8 +411,8 @@ const GroupsPage = () => {
         <form onSubmit={handleSubmit} className="space-y-4">
           <Input label="Nama Grup" value={formData.name} onChange={e=>setFormData({...formData, name: e.target.value})} required />
           <div className="grid grid-cols-2 gap-4">
-             <Select label="Metode Arisan" value={formData.method} onChange={e=>setFormData({...formData, method: e.target.value})} options={['Undi Berkala', 'Simpan Dana / Pencairan Akhir']} required />
-             <Select label="Tenor Setoran" value={formData.tenor} onChange={e=>setFormData({...formData, tenor: e.target.value})} options={['Harian', 'Mingguan', 'Bulanan']} required />
+            <Select label="Metode Arisan" value={formData.method} onChange={e=>setFormData({...formData, method: e.target.value})} options={['Undi Berkala', 'Simpan Dana / Pencairan Akhir']} required />
+            <Select label="Tenor Setoran" value={formData.tenor} onChange={e=>setFormData({...formData, tenor: e.target.value})} options={['Harian', 'Mingguan', 'Bulanan']} required />
           </div>
           <Input label="Nominal Setor (Rp)" type="number" value={formData.nominal} onChange={e=>setFormData({...formData, nominal: e.target.value})} required />
           <div className="grid grid-cols-2 gap-4">
@@ -507,10 +430,10 @@ const MemberDashboard = () => {
   const { data, currentUser } = useContext(DataContext);
   return (
     <div className="space-y-6">
-      <div className="bg-emerald-950 rounded-[2rem] p-8 text-white relative overflow-hidden shadow-2xl shadow-emerald-950/20">
+      <div className="bg-gray-900 rounded-[2rem] p-8 text-white relative overflow-hidden shadow-2xl shadow-gray-900/20">
          <div className="absolute top-0 right-0 w-64 h-64 bg-emerald-500/20 rounded-full blur-3xl translate-x-1/3 -translate-y-1/3"></div>
          <h2 className="text-3xl font-black relative z-10">Halo, {currentUser.name}!</h2>
-         <p className="text-emerald-300 mt-2 relative z-10 font-medium">Ruang Arisan: <strong className="text-white">{data.tenant?.name || 'Arisan'}</strong></p>
+         <p className="text-gray-300 mt-2 relative z-10 font-medium">Ruang Arisan: <strong className="text-white">{data.tenant?.name || 'Arisan'}</strong></p>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
          <Card>
@@ -525,7 +448,7 @@ const MemberDashboard = () => {
                    <div key={m.id} className="border-b border-gray-100 pb-4 mb-4 last:border-0 last:mb-0 last:pb-0">
                       <div className="flex justify-between items-center mb-2">
                          <p className="font-black text-gray-900 text-lg">{g.name}</p>
-                         <Badge type="info">{g.method} {g.tenor ? `• ${g.tenor}` : ''}</Badge>
+                         <Badge type="info">{g.method} {g.tenor ? `- ${g.tenor}` : ''}</Badge>
                       </div>
                       <p className="text-sm text-gray-500 font-bold">Tagihan Rutin: <span className="text-emerald-600 font-black">{formatRp(g.nominal)}</span></p>
                    </div>
@@ -546,14 +469,14 @@ const Sidebar = ({ role, currentView, setView, isMobileOpen, setMobileOpen }) =>
   return (
     <>
       {isMobileOpen && <div className="fixed inset-0 bg-gray-900/60 z-40 lg:hidden backdrop-blur-sm" onClick={() => setMobileOpen(false)} />}
-      <div className={`fixed inset-y-0 left-0 w-72 bg-emerald-950 text-emerald-100 z-50 transform transition-transform duration-300 ease-in-out lg:translate-x-0 ${isMobileOpen ? 'translate-x-0' : '-translate-x-full'}`}>
-        <div className="p-8 border-b border-emerald-900 flex items-center gap-4">
-           <div className="bg-emerald-500 p-2 rounded-xl text-emerald-950"><Layers size={24} strokeWidth={3} /></div>
-           <h1 className="text-2xl font-black text-white tracking-tight">ArisanDigital</h1>
+      <div className={`fixed inset-y-0 left-0 w-72 bg-gray-950 text-gray-300 z-50 transform transition-transform duration-300 ease-in-out lg:translate-x-0 ${isMobileOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+        <div className="p-8 border-b border-gray-800/50 flex items-center gap-4">
+           <div className="bg-emerald-500 p-2 rounded-xl text-gray-900"><Layers size={24} strokeWidth={3} /></div>
+           <h1 className="text-2xl font-black text-white tracking-tight">ArisanAman</h1>
         </div>
         <div className="p-6 flex flex-col gap-3">
           {menu.map(item => (
-            <button key={item.id} onClick={() => { setView(item.id); setMobileOpen(false); }} className={`w-full flex items-center gap-4 px-5 py-4 rounded-2xl transition-all font-bold ${currentView === item.id ? 'bg-emerald-900 text-white shadow-lg' : 'hover:bg-emerald-900 hover:text-white'}`}>
+            <button key={item.id} onClick={() => { setView(item.id); setMobileOpen(false); }} className={`w-full flex items-center gap-4 px-5 py-4 rounded-2xl transition-all font-bold ${currentView === item.id ? 'bg-gray-800 text-white shadow-lg shadow-gray-900' : 'hover:bg-gray-900 hover:text-white'}`}>
               {item.icon} {item.label}
             </button>
           ))}
@@ -573,7 +496,7 @@ const Header = ({ setMobileOpen }) => {
            <p className="text-sm font-black text-gray-900">{currentUser?.name}</p>
            <p className="text-xs text-gray-500 font-bold uppercase tracking-widest mt-0.5">{currentUser?.role}</p>
         </div>
-        <div className="w-11 h-11 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-700 font-black text-lg border-2 border-white shadow-md">{currentUser?.name?.charAt(0).toUpperCase()}</div>
+        <div className="w-11 h-11 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-700 font-black text-lg border-2 border-white shadow-md">{currentUser?.name.charAt(0).toUpperCase()}</div>
         <button onClick={logout} className="text-gray-400 hover:text-red-500 p-2 transition-colors hover:bg-red-50 rounded-xl"><LogOut size={20}/></button>
       </div>
     </header>
